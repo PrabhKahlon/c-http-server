@@ -7,6 +7,7 @@
 #include <netdb.h>
 
 #define SERVER_PORT "8080"
+#define MAX_BUFFER 1024
 
 //Check if address is IPV4 or IPV6
 void *get_in_addr(struct sockaddr *sa)
@@ -88,9 +89,9 @@ int main(int argc, char const *argv[])
     {
         // Accept the connection
         socklen_t addr_size = sizeof(inboundAddr);
-        int newfd = accept(serverSocket, (struct sockaddr *)&inboundAddr, &addr_size);
+        int clientSocket = accept(serverSocket, (struct sockaddr *)&inboundAddr, &addr_size);
 
-        if(newfd == -1) {
+        if(clientSocket == -1) {
             fprintf(stderr, "Failed to accept connection\n");
             exit(1);
             continue;
@@ -104,9 +105,22 @@ int main(int argc, char const *argv[])
 
         printf("Connection Successful with %s\n", addrString);
 
+        int messageSize = 0;
+        char buffer[MAX_BUFFER];
+
+        messageSize = recv(clientSocket, buffer, MAX_BUFFER - 1, 0);
+        if(messageSize == -1) 
+        {
+            fprintf(stderr, "Did not receive anything\n");
+            exit(1);
+        }
+        buffer[messageSize] = '\0';
+
+        printf("%s\n", buffer);
+
         // Exit gracefully
         int closeCode = shutdown(serverSocket, 2);
-        int fCode = shutdown(newfd, 2);
+        int fCode = shutdown(clientSocket, 2);
         break;
     }
 
