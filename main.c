@@ -8,24 +8,69 @@
 
 #define SERVER_PORT "8080"
 #define MAX_BUFFER 1024
+#define MAX_TOKENS 100
 
-//Check if address is IPV4 or IPV6
-void *get_in_addr(struct sockaddr *sa)
+typedef struct {
+    char **tokens;
+    int count;
+} StringList;
+
+//Splits a string into an array of tokens
+StringList splitString(const char *str, const char *delim) {
+    StringList result;
+    result.tokens = (char **)malloc(MAX_TOKENS * sizeof(char *));
+    if (result.tokens == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(1);
+    }
+    result.count = 0;
+
+    // Make a copy of the input string to avoid modifying the original string
+    char *str_copy = strdup(str);
+    if (str_copy == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(1);
+    }
+
+    char *saveptr;
+    char *token = strtok_r(str_copy, delim, &saveptr);
+
+    while (token != NULL && result.count < MAX_TOKENS) {
+        result.tokens[result.count++] = strdup(token);
+        token = strtok_r(NULL, delim, &saveptr);
+    }
+
+    // Free the copied string as it's no longer needed
+    free(str_copy);
+
+    return result;
+}
+
+void freeStringList(StringList *result) {
+    for (int i = 0; i < result->count; i++) {
+        free(result->tokens[i]);
+    }
+    free(result->tokens);
+}
+
+// Check if address is IPV4 or IPV6
+void* getInAddr(struct sockaddr* sa)
 {
-    if (sa->sa_family == AF_INET) {
+    if (sa->sa_family == AF_INET)
+    {
         return &(((struct sockaddr_in*)sa)->sin_addr);
     }
 
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-int main(int argc, char const *argv[])
+int main(int argc, char const* argv[])
 {
     int addrStatus = 0;
     int serverSocket = 0;
     struct sockaddr_storage inboundAddr;
     struct addrinfo aInfo;
-    struct addrinfo *results;
+    struct addrinfo* results;
 
     memset(&aInfo, 0, sizeof(aInfo));
     aInfo.ai_family = AF_UNSPEC;
@@ -40,7 +85,7 @@ int main(int argc, char const *argv[])
     }
 
     // Struct to hold results from addrinfo and go through the linked list without overwriting results
-    struct addrinfo *i;
+    struct addrinfo* i;
     // Look for free socket to use
     for (i = results; i != NULL; i = i->ai_next)
     {
@@ -89,19 +134,19 @@ int main(int argc, char const *argv[])
     {
         // Accept the connection
         socklen_t addr_size = sizeof(inboundAddr);
-        int clientSocket = accept(serverSocket, (struct sockaddr *)&inboundAddr, &addr_size);
+        int clientSocket = accept(serverSocket, (struct sockaddr*)&inboundAddr, &addr_size);
 
-        if(clientSocket == -1) {
+        if (clientSocket == -1)
+        {
             fprintf(stderr, "Failed to accept connection\n");
             exit(1);
             continue;
         }
 
-
-        //Show who connected
+        // Show who connected
         char addrString[INET6_ADDRSTRLEN];
 
-        inet_ntop(inboundAddr.ss_family, get_in_addr((struct sockaddr*)&inboundAddr), addrString, sizeof(addrString));
+        inet_ntop(inboundAddr.ss_family, getInAddr((struct sockaddr*)&inboundAddr), addrString, sizeof(addrString));
 
         printf("Connection Successful with %s\n", addrString);
 
@@ -109,14 +154,28 @@ int main(int argc, char const *argv[])
         char buffer[MAX_BUFFER];
 
         messageSize = recv(clientSocket, buffer, MAX_BUFFER - 1, 0);
-        if(messageSize == -1) 
+        if (messageSize == -1)
         {
             fprintf(stderr, "Did not receive anything\n");
             exit(1);
         }
         buffer[messageSize] = '\0';
 
-        printf("%s\n", buffer);
+        StringList headers = splitString(buffer, "\n");
+        StringList request = splitString(headers.tokens[0], " ");
+        printf("Request = %s\n", request.tokens[0]);
+        if(strcmp(request.tokens[0], "GET") == 0) {
+            //Handle GET request. Returning 404 for now.
+            char header[MAX_BUFFER] = "HTTP/1.1 404 Not Found\n\n";
+            printf("404: File not found\n");
+            int sendCode = send(clientSocket, &header, MAX_BUFFER-1, 0);
+            if(sendCode == -1) {
+                fprintf(stderr, "Failed to send message\n");
+                exit(1);
+            }
+        }
+        freeStringList(&headers);
+        freeStringList(&request);
 
         // Exit gracefully
         int closeCode = shutdown(serverSocket, 2);
