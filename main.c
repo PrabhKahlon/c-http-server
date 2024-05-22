@@ -77,7 +77,7 @@ char* readFile(char* filename)
     char* fileData = (char*)malloc((fileSize + 1) * sizeof(char));
     size_t bytesRead = fread(fileData, sizeof(char), fileSize, fptr);
 
-    if(bytesRead != fileSize) {
+    if (bytesRead != fileSize) {
         return NULL;
     }
     fileData[fileSize] = '\0';
@@ -107,6 +107,7 @@ int main(int argc, char const* argv[])
 {
     int addrStatus = 0;
     int serverSocket = 0;
+    int clientSocket = 0;
     struct sockaddr_storage inboundAddr;
     struct addrinfo aInfo;
     struct addrinfo* results;
@@ -138,7 +139,18 @@ int main(int argc, char const* argv[])
         int yes = 1;
         if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1)
         {
-            fprintf(stderr, "Failed to set socket options\n");
+            fprintf(stderr, "Failed to set socket reuse addr option\n");
+            exit(1);
+        }
+
+        //Set a timeout for the socket
+        struct timeval timeout;
+        timeout.tv_sec = 10;
+        timeout.tv_usec = 0;
+
+        if (setsockopt(serverSocket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1)
+        {
+            fprintf(stderr, "Failed to set socket timeout option\n");
             exit(1);
         }
 
@@ -173,12 +185,12 @@ int main(int argc, char const* argv[])
     {
         // Accept the connection
         socklen_t addr_size = sizeof(inboundAddr);
-        int clientSocket = accept(serverSocket, (struct sockaddr*)&inboundAddr, &addr_size);
+        clientSocket = accept(serverSocket, (struct sockaddr*)&inboundAddr, &addr_size);
 
         if (clientSocket == -1)
         {
             fprintf(stderr, "Failed to accept connection\n");
-            exit(1);
+            //exit(1);
             continue;
         }
 
@@ -197,13 +209,19 @@ int main(int argc, char const* argv[])
         if (messageSize == -1)
         {
             fprintf(stderr, "Did not receive anything\n");
-            exit(1);
+            continue;
         }
         buffer[messageSize] = '\0';
-
+        printf("%s\n", buffer);
         //Look through headers to determine the type of request
         StringList headers = splitString(buffer, "\n");
+        if(headers.count < 1) {
+            break;
+        }
         StringList request = splitString(headers.tokens[0], " ");
+        if(request.count < 1) {
+            break;
+        }
         printf("Request = %s\n", request.tokens[0]);
 
         //Handle GET request
@@ -212,11 +230,20 @@ int main(int argc, char const* argv[])
             printf("File to open = %s\n", request.tokens[1]);
 
             //strip the "/" off the file name and open the file.
-            char* fileName = (char*)malloc((strlen(request.tokens[1]) + 1) * sizeof(char));
-            strcpy(fileName, request.tokens[1] + 1);
-            printf("File to open = %s\n", fileName);
-            char* fileData = readFile(fileName);
-            free(fileName);
+            char* fileData;
+            if (strcmp(request.tokens[1], "/") == 0)
+            {
+                char fileName[] = "200.html";
+                fileData = readFile(fileName);
+            }
+            else
+            {
+                char* fileName = (char*)malloc((strlen(request.tokens[1]) + 1) * sizeof(char));
+                strcpy(fileName, request.tokens[1] + 1);
+                printf("File to open = %s\n", fileName);
+                fileData = readFile(fileName);
+                free(fileName);
+            }
 
             //If the file exists send it to the client otherwise 404
             if (fileData != NULL)
@@ -258,10 +285,11 @@ int main(int argc, char const* argv[])
         freeStringList(&request);
 
         // Exit gracefully
-        int closeCode = shutdown(serverSocket, 2);
         int fCode = shutdown(clientSocket, 2);
-        break;
+        printf("Done: %d\n", fCode);
+        //break;
     }
 
+    int closeCode = shutdown(serverSocket, 2);
     return 0;
 }
