@@ -11,31 +11,35 @@
 #define MAX_TOKENS 100
 
 typedef struct {
-    char **tokens;
+    char** tokens;
     int count;
 } StringList;
 
 //Splits a string into an array of tokens
-StringList splitString(const char *str, const char *delim) {
+StringList splitString(const char* str, const char* delim)
+{
     StringList result;
-    result.tokens = (char **)malloc(MAX_TOKENS * sizeof(char *));
-    if (result.tokens == NULL) {
+    result.tokens = (char**)malloc(MAX_TOKENS * sizeof(char*));
+    if (result.tokens == NULL)
+    {
         fprintf(stderr, "Memory allocation failed\n");
         exit(1);
     }
     result.count = 0;
 
     // Make a copy of the input string to avoid modifying the original string
-    char *str_copy = strdup(str);
-    if (str_copy == NULL) {
+    char* str_copy = strdup(str);
+    if (str_copy == NULL)
+    {
         fprintf(stderr, "Memory allocation failed\n");
         exit(1);
     }
 
-    char *saveptr;
-    char *token = strtok_r(str_copy, delim, &saveptr);
+    char* saveptr;
+    char* token = strtok_r(str_copy, delim, &saveptr);
 
-    while (token != NULL && result.count < MAX_TOKENS) {
+    while (token != NULL && result.count < MAX_TOKENS)
+    {
         result.tokens[result.count++] = strdup(token);
         token = strtok_r(NULL, delim, &saveptr);
     }
@@ -46,11 +50,46 @@ StringList splitString(const char *str, const char *delim) {
     return result;
 }
 
-void freeStringList(StringList *result) {
-    for (int i = 0; i < result->count; i++) {
+void freeStringList(StringList* result)
+{
+    for (int i = 0; i < result->count; i++)
+    {
         free(result->tokens[i]);
     }
     free(result->tokens);
+}
+
+//Reads all data from a file into a buffer
+char* readFile(char* filename)
+{
+    FILE* fptr = fopen(filename, "r");
+    if (fptr == NULL)
+    {
+        return NULL;
+    }
+
+    //Get the size of the file
+    fseek(fptr, 0, SEEK_END);
+    long fileSize = ftell(fptr);
+    fseek(fptr, 0, SEEK_SET);
+
+    //Read our fileData properly so that it is null terminated and ensure we read the whole file
+    char* fileData = (char*)malloc((fileSize + 1) * sizeof(char));
+    size_t bytesRead = fread(fileData, sizeof(char), fileSize, fptr);
+
+    if(bytesRead != fileSize) {
+        return NULL;
+    }
+    fileData[fileSize] = '\0';
+
+    //Close file and return
+    fclose(fptr);
+    return fileData;
+}
+
+void freeFile(char* fileData)
+{
+    free(fileData);
 }
 
 // Check if address is IPV4 or IPV6
@@ -113,6 +152,7 @@ int main(int argc, char const* argv[])
         break;
     }
 
+    //Free up the addrinfo that is now no longer needed
     freeaddrinfo(results);
 
     if (i == NULL)
@@ -122,7 +162,6 @@ int main(int argc, char const* argv[])
     }
 
     // Socket for the server to bind to
-
     if (listen(serverSocket, 10) == -1)
     {
         fprintf(stderr, "Failed to listen on server socket\n");
@@ -153,6 +192,7 @@ int main(int argc, char const* argv[])
         int messageSize = 0;
         char buffer[MAX_BUFFER];
 
+        //Receive the http1.1 request
         messageSize = recv(clientSocket, buffer, MAX_BUFFER - 1, 0);
         if (messageSize == -1)
         {
@@ -161,19 +201,59 @@ int main(int argc, char const* argv[])
         }
         buffer[messageSize] = '\0';
 
+        //Look through headers to determine the type of request
         StringList headers = splitString(buffer, "\n");
         StringList request = splitString(headers.tokens[0], " ");
         printf("Request = %s\n", request.tokens[0]);
-        if(strcmp(request.tokens[0], "GET") == 0) {
-            //Handle GET request. Returning 404 for now.
-            char header[MAX_BUFFER] = "HTTP/1.1 404 Not Found\n\n";
-            printf("404: File not found\n");
-            int sendCode = send(clientSocket, &header, MAX_BUFFER-1, 0);
-            if(sendCode == -1) {
-                fprintf(stderr, "Failed to send message\n");
-                exit(1);
+
+        //Handle GET request
+        if (strcmp(request.tokens[0], "GET") == 0)
+        {
+            printf("File to open = %s\n", request.tokens[1]);
+
+            //strip the "/" off the file name and open the file.
+            char* fileName = (char*)malloc((strlen(request.tokens[1]) + 1) * sizeof(char));
+            strcpy(fileName, request.tokens[1] + 1);
+            printf("File to open = %s\n", fileName);
+            char* fileData = readFile(fileName);
+            free(fileName);
+
+            //If the file exists send it to the client otherwise 404
+            if (fileData != NULL)
+            {
+                int fileLength = strlen(fileData);
+                printf("Found file\n");
+                char header[] = "HTTP/1.1 200 OK\n\n";
+                char* response = (char*)malloc(strlen(header) + 1 + fileLength);
+                strcpy(response, "\0");
+                strcat(response, header);
+                strcat(response, fileData);
+
+                int sendCode = send(clientSocket, response, strlen(response), 0);
+                if (sendCode == -1)
+                {
+                    free(response);
+                    fprintf(stderr, "Failed to send message\n");
+                    exit(1);
+                }
+                free(response);
+                freeFile(fileData);
+            }
+            else
+            {
+                //Return 404 when file is not found
+                char header[MAX_BUFFER] = "HTTP/1.1 404 Not Found\n\n";
+                printf("404: File not found\n");
+                int sendCode = send(clientSocket, &header, MAX_BUFFER - 1, 0);
+                if (sendCode == -1)
+                {
+                    fprintf(stderr, "Failed to send message\n");
+                    exit(1);
+                }
             }
         }
+
+        //Free up or string lists
         freeStringList(&headers);
         freeStringList(&request);
 
