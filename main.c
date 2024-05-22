@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -15,96 +16,85 @@ typedef struct {
     int count;
 } StringList;
 
-//Splits a string into an array of tokens
-StringList splitString(const char* str, const char* delim)
-{
+// Splits a string into an array of tokens
+StringList splitString(const char* str, const char* delim) {
     StringList result;
     result.tokens = (char**)malloc(MAX_TOKENS * sizeof(char*));
-    if (result.tokens == NULL)
-    {
+    if (result.tokens == NULL) {
         fprintf(stderr, "Memory allocation failed\n");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
     result.count = 0;
 
     // Make a copy of the input string to avoid modifying the original string
     char* str_copy = strdup(str);
-    if (str_copy == NULL)
-    {
+    if (str_copy == NULL) {
         fprintf(stderr, "Memory allocation failed\n");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     char* saveptr;
     char* token = strtok_r(str_copy, delim, &saveptr);
 
-    while (token != NULL && result.count < MAX_TOKENS)
-    {
+    while (token != NULL && result.count < MAX_TOKENS) {
         result.tokens[result.count++] = strdup(token);
         token = strtok_r(NULL, delim, &saveptr);
     }
 
-    // Free the copied string as it's no longer needed
     free(str_copy);
 
     return result;
 }
 
-void freeStringList(StringList* result)
-{
-    for (int i = 0; i < result->count; i++)
-    {
+void freeStringList(StringList* result) {
+    for (int i = 0; i < result->count; i++) {
         free(result->tokens[i]);
     }
     free(result->tokens);
 }
 
-//Reads all data from a file into a buffer
-char* readFile(char* filename)
-{
+// Reads all data from a file into a buffer
+char* readFile(const char* filename) {
     FILE* fptr = fopen(filename, "r");
-    if (fptr == NULL)
-    {
+    if (fptr == NULL) {
         return NULL;
     }
 
-    //Get the size of the file
     fseek(fptr, 0, SEEK_END);
     long fileSize = ftell(fptr);
     fseek(fptr, 0, SEEK_SET);
 
-    //Read our fileData properly so that it is null terminated and ensure we read the whole file
     char* fileData = (char*)malloc((fileSize + 1) * sizeof(char));
-    size_t bytesRead = fread(fileData, sizeof(char), fileSize, fptr);
+    if (fileData == NULL) {
+        fclose(fptr);
+        return NULL;
+    }
 
+    size_t bytesRead = fread(fileData, sizeof(char), fileSize, fptr);
     if (bytesRead != fileSize) {
+        free(fileData);
+        fclose(fptr);
         return NULL;
     }
     fileData[fileSize] = '\0';
 
-    //Close file and return
     fclose(fptr);
     return fileData;
 }
 
-void freeFile(char* fileData)
-{
+void freeFile(char* fileData) {
     free(fileData);
 }
 
 // Check if address is IPV4 or IPV6
-void* getInAddr(struct sockaddr* sa)
-{
-    if (sa->sa_family == AF_INET)
-    {
+void* getInAddr(struct sockaddr* sa) {
+    if (sa->sa_family == AF_INET) {
         return &(((struct sockaddr_in*)sa)->sin_addr);
     }
-
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-int main(int argc, char const* argv[])
-{
+int main(int argc, char const* argv[]) {
     int addrStatus = 0;
     int serverSocket = 0;
     int clientSocket = 0;
@@ -118,178 +108,172 @@ int main(int argc, char const* argv[])
     aInfo.ai_flags = AI_PASSIVE;
 
     addrStatus = getaddrinfo(NULL, SERVER_PORT, &aInfo, &results);
-    if (addrStatus != 0)
-    {
+    if (addrStatus != 0) {
         fprintf(stderr, "Failed to get address information\n");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
-    // Struct to hold results from addrinfo and go through the linked list without overwriting results
     struct addrinfo* i;
-    // Look for free socket to use
-    for (i = results; i != NULL; i = i->ai_next)
-    {
+    for (i = results; i != NULL; i = i->ai_next) {
         serverSocket = socket(i->ai_family, i->ai_socktype, i->ai_protocol);
-        if (serverSocket == -1)
-        {
+        if (serverSocket == -1) {
             continue;
         }
 
-        // Setup the socket to reuse local address
         int yes = 1;
-        if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1)
-        {
+        if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
             fprintf(stderr, "Failed to set socket reuse addr option\n");
-            exit(1);
+            exit(EXIT_FAILURE);
         }
 
-        //Set a timeout for the socket
         struct timeval timeout;
         timeout.tv_sec = 10;
         timeout.tv_usec = 0;
-
-        if (setsockopt(serverSocket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1)
-        {
+        if (setsockopt(serverSocket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1) {
             fprintf(stderr, "Failed to set socket timeout option\n");
-            exit(1);
+            exit(EXIT_FAILURE);
         }
 
-        // Bind socket
-        if (bind(serverSocket, results->ai_addr, results->ai_addrlen) == -1)
-        {
-            shutdown(serverSocket, 0);
+        if (bind(serverSocket, i->ai_addr, i->ai_addrlen) == -1) {
+            close(serverSocket);
             fprintf(stderr, "Failed to bind server socket\n");
             continue;
         }
         break;
     }
 
-    //Free up the addrinfo that is now no longer needed
     freeaddrinfo(results);
 
-    if (i == NULL)
-    {
+    if (i == NULL) {
         fprintf(stderr, "Failed to create server socket\n");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
-    // Socket for the server to bind to
-    if (listen(serverSocket, 10) == -1)
-    {
+    if (listen(serverSocket, 10) == -1) {
         fprintf(stderr, "Failed to listen on server socket\n");
+        exit(EXIT_FAILURE);
     }
 
     printf("Waiting for connection\n");
 
-    while (1)
-    {
-        // Accept the connection
+    while (1) {
         socklen_t addr_size = sizeof(inboundAddr);
         clientSocket = accept(serverSocket, (struct sockaddr*)&inboundAddr, &addr_size);
 
-        if (clientSocket == -1)
-        {
+        if (clientSocket == -1) {
             fprintf(stderr, "Failed to accept connection\n");
-            //exit(1);
             continue;
         }
 
-        // Show who connected
         char addrString[INET6_ADDRSTRLEN];
-
         inet_ntop(inboundAddr.ss_family, getInAddr((struct sockaddr*)&inboundAddr), addrString, sizeof(addrString));
-
         printf("Connection Successful with %s\n", addrString);
 
-        int messageSize = 0;
         char buffer[MAX_BUFFER];
-
-        //Receive the http1.1 request
-        messageSize = recv(clientSocket, buffer, MAX_BUFFER - 1, 0);
-        if (messageSize == -1)
-        {
+        int messageSize = recv(clientSocket, buffer, MAX_BUFFER - 1, 0);
+        if (messageSize == -1) {
             fprintf(stderr, "Did not receive anything\n");
             continue;
         }
         buffer[messageSize] = '\0';
         printf("%s\n", buffer);
-        //Look through headers to determine the type of request
+
         StringList headers = splitString(buffer, "\n");
-        if(headers.count < 1) {
-            break;
+        if (headers.count < 1) {
+            freeStringList(&headers);
+            continue;
         }
         StringList request = splitString(headers.tokens[0], " ");
-        if(request.count < 1) {
-            break;
+        if (request.count < 1) {
+            freeStringList(&headers);
+            freeStringList(&request);
+            continue;
         }
         printf("Request = %s\n", request.tokens[0]);
 
-        //Handle GET request
-        if (strcmp(request.tokens[0], "GET") == 0)
-        {
-            printf("File to open = %s\n", request.tokens[1]);
+        if (!((strcmp(request.tokens[0], "GET") == 0) || (strcmp(request.tokens[0], "POST") == 0))) {
+            //[400] Bad Request
+            printf("[400] Bad Request\n");
+            char header[] = "HTTP/1.1 400 Bad Request\n\n";
+            char* fileData = readFile("400.html");
+            if (fileData != NULL) {
+                size_t responseSize = strlen(header) + strlen(fileData) + 1;
+                char* response = (char*)malloc(responseSize);
+                if (response == NULL) {
+                    fprintf(stderr, "Memory allocation failed\n");
+                    free(fileData);
+                    freeStringList(&headers);
+                    freeStringList(&request);
+                    close(clientSocket);
+                    continue;
+                }
+                snprintf(response, responseSize, "%s%s", header, fileData);
 
-            //strip the "/" off the file name and open the file.
-            char* fileData;
-            if (strcmp(request.tokens[1], "/") == 0)
-            {
-                char fileName[] = "200.html";
-                fileData = readFile(fileName);
-            }
-            else
-            {
-                char* fileName = (char*)malloc((strlen(request.tokens[1]) + 1) * sizeof(char));
-                strcpy(fileName, request.tokens[1] + 1);
-                printf("File to open = %s\n", fileName);
-                fileData = readFile(fileName);
-                free(fileName);
-            }
-
-            //If the file exists send it to the client otherwise 404
-            if (fileData != NULL)
-            {
-                int fileLength = strlen(fileData);
-                printf("Found file\n");
-                char header[] = "HTTP/1.1 200 OK\n\n";
-                char* response = (char*)malloc(strlen(header) + 1 + fileLength);
-                strcpy(response, "\0");
-                strcat(response, header);
-                strcat(response, fileData);
-
-                int sendCode = send(clientSocket, response, strlen(response), 0);
-                if (sendCode == -1)
-                {
-                    free(response);
+                if (send(clientSocket, response, strlen(response), 0) == -1) {
                     fprintf(stderr, "Failed to send message\n");
-                    exit(1);
                 }
                 free(response);
                 freeFile(fileData);
             }
-            else
-            {
-                //Return 404 when file is not found
-                char header[MAX_BUFFER] = "HTTP/1.1 404 Not Found\n\n";
-                printf("404: File not found\n");
-                int sendCode = send(clientSocket, &header, MAX_BUFFER - 1, 0);
-                if (sendCode == -1)
-                {
+        }
+        else {
+            printf("File to open = %s\n", request.tokens[1]);
+
+            char* fileData;
+            if (strcmp(request.tokens[1], "/") == 0) {
+                fileData = readFile("200.html");
+            }
+            else {
+                char* fileName = strdup(request.tokens[1] + 1);
+                if (fileName == NULL) {
+                    fprintf(stderr, "Memory allocation failed\n");
+                    freeStringList(&headers);
+                    freeStringList(&request);
+                    close(clientSocket);
+                    continue;
+                }
+                fileData = readFile(fileName);
+                free(fileName);
+            }
+
+            if (fileData != NULL) {
+                char header[] = "HTTP/1.1 200 OK\n\n";
+                size_t responseSize = strlen(header) + strlen(fileData) + 1;
+                char* response = (char*)malloc(responseSize);
+                if (response == NULL) {
+                    fprintf(stderr, "Memory allocation failed\n");
+                    free(fileData);
+                    freeStringList(&headers);
+                    freeStringList(&request);
+                    close(clientSocket);
+                    continue;
+                }
+                snprintf(response, responseSize, "%s%s", header, fileData);
+
+                if (send(clientSocket, response, strlen(response), 0) == -1) {
                     fprintf(stderr, "Failed to send message\n");
-                    exit(1);
+                }
+                free(response);
+                freeFile(fileData);
+            }
+            else {
+                char header[] = "HTTP/1.1 404 Not Found\n\n";
+                if (send(clientSocket, header, strlen(header), 0) == -1) {
+                    fprintf(stderr, "Failed to send message\n");
                 }
             }
         }
 
-        //Free up or string lists
         freeStringList(&headers);
         freeStringList(&request);
 
-        // Exit gracefully
-        int fCode = shutdown(clientSocket, 2);
-        printf("Done: %d\n", fCode);
-        //break;
+        if (shutdown(clientSocket, SHUT_RDWR) == -1) {
+            fprintf(stderr, "Failed to close client socket\n");
+        }
     }
 
-    int closeCode = shutdown(serverSocket, 2);
+    if (shutdown(serverSocket, SHUT_RDWR) == -1) {
+        fprintf(stderr, "Failed to close server socket\n");
+    }
     return 0;
 }
