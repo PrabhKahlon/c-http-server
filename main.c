@@ -156,12 +156,15 @@ int main(int argc, char const* argv[]) {
 
     printf("Waiting for connection\n");
 
+    socklen_t addr_size = sizeof(inboundAddr);
     while (1) {
-        socklen_t addr_size = sizeof(inboundAddr);
         clientSocket = accept(serverSocket, (struct sockaddr*)&inboundAddr, &addr_size);
 
         if (clientSocket == -1) {
             fprintf(stderr, "Failed to accept connection\n");
+            if (shutdown(clientSocket, SHUT_RDWR) == -1) {
+                fprintf(stderr, "Failed to close client socket\n");
+            }
             continue;
         }
 
@@ -173,6 +176,9 @@ int main(int argc, char const* argv[]) {
         int messageSize = recv(clientSocket, buffer, MAX_BUFFER - 1, 0);
         if (messageSize == -1) {
             fprintf(stderr, "Did not receive anything\n");
+            if (shutdown(clientSocket, SHUT_RDWR) == -1) {
+                fprintf(stderr, "Failed to close client socket\n");
+            }
             continue;
         }
         buffer[messageSize] = '\0';
@@ -187,6 +193,9 @@ int main(int argc, char const* argv[]) {
         if (request.count < 1) {
             freeStringList(&headers);
             freeStringList(&request);
+            if (shutdown(clientSocket, SHUT_RDWR) == -1) {
+                fprintf(stderr, "Failed to close client socket\n");
+            }
             continue;
         }
         printf("Request = %s\n", request.tokens[0]);
@@ -204,7 +213,9 @@ int main(int argc, char const* argv[]) {
                     free(fileData);
                     freeStringList(&headers);
                     freeStringList(&request);
-                    close(clientSocket);
+                    if (shutdown(clientSocket, SHUT_RDWR) == -1) {
+                        fprintf(stderr, "Failed to close client socket\n");
+                    }
                     continue;
                 }
                 snprintf(response, responseSize, "%s%s", header, fileData);
@@ -229,7 +240,9 @@ int main(int argc, char const* argv[]) {
                     fprintf(stderr, "Memory allocation failed\n");
                     freeStringList(&headers);
                     freeStringList(&request);
-                    close(clientSocket);
+                    if (shutdown(clientSocket, SHUT_RDWR) == -1) {
+                        fprintf(stderr, "Failed to close client socket\n");
+                    }
                     continue;
                 }
                 fileData = readFile(fileName);
@@ -245,7 +258,9 @@ int main(int argc, char const* argv[]) {
                     free(fileData);
                     freeStringList(&headers);
                     freeStringList(&request);
-                    close(clientSocket);
+                    if (shutdown(clientSocket, SHUT_RDWR) == -1) {
+                        fprintf(stderr, "Failed to close client socket\n");
+                    }
                     continue;
                 }
                 snprintf(response, responseSize, "%s%s", header, fileData);
