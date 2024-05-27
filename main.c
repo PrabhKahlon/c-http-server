@@ -94,6 +94,105 @@ void* getInAddr(struct sockaddr* sa) {
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
+// Finds the file requested by GET and sends it as a response if found.
+void handleGetRequest(int socket, char* fileName) {
+    printf("File to open = %s\n", fileName);
+
+    // If the request is for the index("/") return index.html
+    char* fileData;
+    if (strcmp(fileName, "/") == 0) {
+        fileData = readFile("index.html");
+    }
+    else {
+        // Remove the leading slash from the file name
+        fileName++;
+        fileData = readFile(fileName);
+    }
+
+    // Return [404] Not Found if the file does not exist
+    if (fileData == NULL) {
+        char header[] = "HTTP/1.1 404 Not Found\r\n\r\n";
+        if (send(socket, header, strlen(header), 0) == -1) {
+            fprintf(stderr, "Failed to send message\n");
+        }
+        return;
+    }
+
+    // Send the file to the server
+    char header[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n";
+    size_t responseSize = strlen(header) + strlen(fileData) + 1;
+    char* response = (char*)malloc(responseSize);
+    if (response == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        free(fileData);
+        return;
+    }
+    snprintf(response, responseSize, "%s%s", header, fileData);
+
+    if (send(socket, response, strlen(response), 0) == -1) {
+        fprintf(stderr, "Failed to send message\n");
+    }
+    free(response);
+    freeFile(fileData);
+}
+
+// Parses HTTP headers and handles handles the request
+void handleHttpRequest(int socket, char* requestBuffer) {
+
+    // Get headers from the request string
+    StringList headers = splitString(requestBuffer, "\n");
+    if (headers.count < 1) {
+        freeStringList(&headers);
+        return;
+    }
+
+    // Split the first line of headers that contains the request type and filename
+    StringList request = splitString(headers.tokens[0], " ");
+    if (request.count < 1) {
+        freeStringList(&headers);
+        freeStringList(&request);
+        return;
+    }
+
+    printf("Request = %s\n", request.tokens[0]);
+    freeStringList(&headers);
+
+    // Basic server handles only GET, POST and HEAD. Send error if not one of these requests.
+    // [400] Bad Request
+    if (!((strcmp(request.tokens[0], "GET") == 0) || (strcmp(request.tokens[0], "POST") == 0) || (strcmp(request.tokens[0], "HEAD") == 0))) {
+        printf("[400] Bad Request\n");
+        char header[] = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\n";
+        char* fileData = readFile("400.html");
+        if (fileData != NULL) {
+            size_t responseSize = strlen(header) + strlen(fileData) + 1;
+            char* response = (char*)malloc(responseSize);
+            if (response == NULL) {
+                fprintf(stderr, "Memory allocation failed\n");
+                free(fileData);
+                freeStringList(&request);
+                return;
+            }
+            snprintf(response, responseSize, "%s%s", header, fileData);
+
+            if (send(socket, response, strlen(response), 0) == -1) {
+                fprintf(stderr, "Failed to send message\n");
+            }
+            free(response);
+            freeFile(fileData);
+        }
+        return;
+    }
+
+    char* fileName = request.tokens[1];
+
+    if (strcmp(request.tokens[0], "GET") == 0) {
+        handleGetRequest(socket, fileName);
+    }
+
+    freeStringList(&request);
+    return;
+}
+
 int main(int argc, char const* argv[]) {
     int addrStatus = 0;
     int serverSocket = 0;
@@ -135,7 +234,9 @@ int main(int argc, char const* argv[]) {
         }
 
         if (bind(serverSocket, i->ai_addr, i->ai_addrlen) == -1) {
-            close(serverSocket);
+            if (shutdown(serverSocket, SHUT_RDWR) == -1) {
+                fprintf(stderr, "Failed to close client socket\n");
+            }
             fprintf(stderr, "Failed to bind server socket\n");
             continue;
         }
@@ -184,103 +285,7 @@ int main(int argc, char const* argv[]) {
         buffer[messageSize] = '\0';
         printf("%s\n", buffer);
 
-        StringList headers = splitString(buffer, "\n");
-        if (headers.count < 1) {
-            freeStringList(&headers);
-            continue;
-        }
-        StringList request = splitString(headers.tokens[0], " ");
-        if (request.count < 1) {
-            freeStringList(&headers);
-            freeStringList(&request);
-            if (shutdown(clientSocket, SHUT_RDWR) == -1) {
-                fprintf(stderr, "Failed to close client socket\n");
-            }
-            continue;
-        }
-        printf("Request = %s\n", request.tokens[0]);
-
-        if (!((strcmp(request.tokens[0], "GET") == 0) || (strcmp(request.tokens[0], "POST") == 0))) {
-            //[400] Bad Request
-            printf("[400] Bad Request\n");
-            char header[] = "HTTP/1.1 400 Bad Request\n\n";
-            char* fileData = readFile("400.html");
-            if (fileData != NULL) {
-                size_t responseSize = strlen(header) + strlen(fileData) + 1;
-                char* response = (char*)malloc(responseSize);
-                if (response == NULL) {
-                    fprintf(stderr, "Memory allocation failed\n");
-                    free(fileData);
-                    freeStringList(&headers);
-                    freeStringList(&request);
-                    if (shutdown(clientSocket, SHUT_RDWR) == -1) {
-                        fprintf(stderr, "Failed to close client socket\n");
-                    }
-                    continue;
-                }
-                snprintf(response, responseSize, "%s%s", header, fileData);
-
-                if (send(clientSocket, response, strlen(response), 0) == -1) {
-                    fprintf(stderr, "Failed to send message\n");
-                }
-                free(response);
-                freeFile(fileData);
-            }
-        }
-        else {
-            printf("File to open = %s\n", request.tokens[1]);
-
-            char* fileData;
-            if (strcmp(request.tokens[1], "/") == 0) {
-                fileData = readFile("200.html");
-            }
-            else {
-                char* fileName = strdup(request.tokens[1] + 1);
-                if (fileName == NULL) {
-                    fprintf(stderr, "Memory allocation failed\n");
-                    freeStringList(&headers);
-                    freeStringList(&request);
-                    if (shutdown(clientSocket, SHUT_RDWR) == -1) {
-                        fprintf(stderr, "Failed to close client socket\n");
-                    }
-                    continue;
-                }
-                fileData = readFile(fileName);
-                free(fileName);
-            }
-
-            if (fileData != NULL) {
-                char header[] = "HTTP/1.1 200 OK\n\n";
-                size_t responseSize = strlen(header) + strlen(fileData) + 1;
-                char* response = (char*)malloc(responseSize);
-                if (response == NULL) {
-                    fprintf(stderr, "Memory allocation failed\n");
-                    free(fileData);
-                    freeStringList(&headers);
-                    freeStringList(&request);
-                    if (shutdown(clientSocket, SHUT_RDWR) == -1) {
-                        fprintf(stderr, "Failed to close client socket\n");
-                    }
-                    continue;
-                }
-                snprintf(response, responseSize, "%s%s", header, fileData);
-
-                if (send(clientSocket, response, strlen(response), 0) == -1) {
-                    fprintf(stderr, "Failed to send message\n");
-                }
-                free(response);
-                freeFile(fileData);
-            }
-            else {
-                char header[] = "HTTP/1.1 404 Not Found\n\n";
-                if (send(clientSocket, header, strlen(header), 0) == -1) {
-                    fprintf(stderr, "Failed to send message\n");
-                }
-            }
-        }
-
-        freeStringList(&headers);
-        freeStringList(&request);
+        handleHttpRequest(clientSocket, buffer);
 
         if (shutdown(clientSocket, SHUT_RDWR) == -1) {
             fprintf(stderr, "Failed to close client socket\n");
