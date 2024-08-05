@@ -183,9 +183,8 @@ void handleHttpRequest(int socket, char* requestBuffer) {
         return;
     }
 
-    char* fileName = request.tokens[1];
-
     if (strcmp(request.tokens[0], "GET") == 0) {
+        char* fileName = request.tokens[1];
         handleGetRequest(socket, fileName);
     }
 
